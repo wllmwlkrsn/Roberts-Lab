@@ -1,0 +1,303 @@
+---
+author: "W.B. Wilkerson"
+---
+Expect this file to take a while to run.
+
+Chunk will allow you to specify your working directory below.
+```{r setup, include = FALSE}
+wd <- "/Users/wllmwlkrsn/Desktop/Roberts Lab/Roberts Lab R/Roberts Lab Project"
+knitr::opts_knit$set(root.dir = wd)
+setwd(wd)
+```
+
+Running this chunk will load the packages needed to run this file.
+```{r, echo=FALSE}
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(sqldf)
+library(ggplot2)
+library(cluster)
+library(factoextra)
+library(stargazer)
+library(survival)
+library(ggfortify)
+library(fastDummies)
+library(GGally)
+library(survminer)
+library(rms)
+```
+
+This chunk defines the Wider() function which will create a data frame of binary variables with a name column of 'ID_text' and columns of binary variable '1' if the ... finish later.
+```{r}
+Wider <- function(df, ID_text, Variable_of_Interest) {
+  df <-  dplyr::select(df, c(ID_text, Variable_of_Interest))
+  df$Positive <- 1
+  df <- unique(df)
+  df_wide <- data.frame(pivot_wider(df, values_from = Positive, names_from = Variable_of_Interest, values_fill = 0))
+  return(df_wide)
+}
+
+Summary_Plots <- function(df, df_colsum) {
+  p <- ggplot(df, aes(x = Row_Sums)) +
+    geom_histogram(stat = "bin", fill = "skyblue", color = "black", alpha = 0.7) +
+    labs(title = "Frequency of Mutation in Patient Samples Histogram",
+         x = "Number of Mutations Detected in Cell Line",
+         y = "Count") +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5))
+  print(p)
+  
+  p <- ggplot(df_colsum, aes(x = ColSum)) +
+    geom_histogram(stat = "bin", fill = "#FF5733", color = "black", alpha = 0.7) +
+    labs(title = "Frequency of Mutation at Gene Histogram",
+         x = "Number of Cell Lines",
+         y = "Number of Genes with Detected Mutations") +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5))
+  print(p)      
+}
+```
+
+For this analysis I will only look at COSMIC tier 1 genes. For more about the Catalogue Of Somatic Mutations In Cancer (COSMIC) project, click [here] (https://cancer.sanger.ac.uk/cosmic).
+```{r, warning=FALSE}
+setwd(wd)
+if (!exists("COSMIC")) {
+  COSMIC <- sqldf::read.csv.sql(file.path(getwd(), "Cosmic dataset", "CancerMutationCensus_AllData_v99_GRCh37.tsv"), sql = "select * from file where CGC_TIER = 1", sep = '\t')
+  COSMIC <- COSMIC[ , colSums(COSMIC == "") < (nrow(COSMIC) * 0.5)]
+  COSMIC <- dplyr::rename(COSMIC, Hugo_Symbol = GENE_NAME)
+  COSMIC <- dplyr::rename(COSMIC, HGVSp_Short = Mutation.AA)
+  COSMIC <- dplyr::rename(COSMIC, cDNA_Change = Mutation.CDS)
+  COSMIC$Gene_HGVSpShort <- paste(COSMIC$Hugo_Symbol, COSMIC$HGVSp_Short, sep = "_")   
+}
+```
+
+Could definitely add some EDA of 'COSMIC' data set. IN THE FUTURE.
+
+This is the snippet of code that allows you to specify the cancer type you're interested in exploring by inputting the corresponding 'OncotreeCode'. To search for the appropriate code, visit this site [link] (https://oncotree.mskcc.org/).
+```{r}
+setwd(wd)
+DEPMAP <- read.csv(file.path(getwd(), "DEPMAP dataset", "Model.csv"))
+DEPMAP <- select(DEPMAP, c(ModelID, OncotreeCode, StrippedCellLineName, Age, AgeCategory, Sex, PatientRace, SangerModelID, COSMICID))
+Cancer_of_Interest <- "AML" #readline(prompt = "Enter the oncotree code of your cancer of interest: ")
+DEPMAP <- filter(DEPMAP, OncotreeCode == Cancer_of_Interest)
+```
+
+Cancer cell line data import and cleaning.
+```{r}
+setwd(wd)
+CCLE <- read.delim(file.path(getwd(), "ccle_broad_2019", "data_mutations.txt"), header=TRUE, comment.char="#")
+CCLE <- CCLE[ , colSums(is.na(CCLE)) < (nrow(CCLE) * 0.5)]
+CCLE <- dplyr::rename(CCLE, ModelID = Broad_ID)
+CCLE <- dplyr::rename(CCLE, GENOMIC_MUT_ALLELE_SEQ = Tumor_Seq_Allele2)
+CCLE <- CCLE[CCLE$ModelID %in% DEPMAP$ModelID, ]
+CCLE$Gene_HGVSpShort <- paste(CCLE$Hugo_Symbol, CCLE$HGVSp_Short, sep = "_")
+```
+
+Reading in pharmacological data available for specified model type. I made the decision to only look at cell lines with treatment data for this analysis.
+```{r}
+setwd(wd)
+CCLE_IC50 <- read.delim(file.path(getwd(), "ccle_broad_2019", "data_drug_treatment_ic50.txt"), header=TRUE, comment.char="#")
+colnames(CCLE_IC50) <- str_replace(colnames(CCLE_IC50), "_.*", "")
+CCLE_IC50 <- cbind(CCLE_IC50[, 1:4], CCLE_IC50[ , names(CCLE_IC50) %in% DEPMAP$StrippedCellLineName])
+DEPMAP <- DEPMAP[DEPMAP$StrippedCellLineName %in% names(CCLE_IC50), ]
+CCLE <- CCLE[CCLE$ModelID %in% DEPMAP$ModelID, ]
+CCLE <- right_join(CCLE, DEPMAP)
+```
+
+Exploratory data analysis of all the mutations detected in cancer cell lines.
+```{r}
+CCLE_Wide <- Wider(CCLE, "StrippedCellLineName", "Hugo_Symbol")
+rownames(CCLE_Wide) <- CCLE_Wide[,1]
+CCLE_Wide <- CCLE_Wide
+
+ColSum <- data.frame(colSums(CCLE_Wide[,-1]))
+colnames(ColSum) <- "ColSum"
+CCLE_Wide$Row_Sums <- rowSums(CCLE_Wide[,-1])
+
+Summary_Plots(CCLE_Wide, ColSum)
+```
+
+Exploratory data analysis of mutations detected in cancer cell line that are categorized as 'COSMIC' tier 1.
+```{r}
+CCLE_Wide <- Wider(CCLE[CCLE$Hugo_Symbol %in% COSMIC$Hugo_Symbol,], "StrippedCellLineName", "Hugo_Symbol")
+
+ColSum <- data.frame(colSums(CCLE_Wide[,-1]))
+colnames(ColSum) <- "ColSum"
+CCLE_Wide$Row_Sums <- rowSums(CCLE_Wide[,-1])
+
+Summary_Plots(CCLE_Wide, ColSum)
+```
+
+Exploratory data analysis of individual variants of mutations detected in cancer cell line that are categorized as 'COSMIC' tier 1.
+```{r}
+CCLE <- CCLE[CCLE$Hugo_Symbol %in% COSMIC$Hugo_Symbol ,]
+CCLE_Wide <- Wider(CCLE, "StrippedCellLineName", "Gene_HGVSpShort")
+
+ColSum <- data.frame(colSums(CCLE_Wide[,-1]))
+colnames(ColSum) <- "ColSum"
+CCLE_Wide$Row_Sums <- rowSums(CCLE_Wide[,-1])
+
+Summary_Plots(CCLE_Wide, ColSum)
+```
+
+This chunk of code filters out variants that are not strongly associated with cancer in 'COSMIC' tier 1 genes. This is the best solution I could come up with currently to ensure that mutations at 'COSMIC' tier 1 genes are oncogenic. I will try to revisit this in the near future, perhaps weighing gene above variant, or some kind of 3D data structure could allow the same analysis to be performed without compromising biologically significant differences in mutations.
+```{r}
+COSMIC <- COSMIC %>%
+  mutate(Keep = case_when(
+    Mutation.Description.CDS == "Substitution" & MIN_SIFT_SCORE <= 0.05 ~ TRUE,
+    Mutation.Description.CDS != "Substitution" ~ TRUE,
+    Mutation.Description.CDS == "Substitution" & MIN_SIFT_SCORE > 0.05 ~ FALSE
+  ))
+COSMIC <- filter(COSMIC, Keep)
+COSMIC <- filter(COSMIC, MUTATION_SIGNIFICANCE_TIER != 3)
+
+CCLE <- CCLE[CCLE$Gene_HGVSpShort %in% COSMIC$Gene_HGVSpShort, ]
+CCLE_Wide <- Wider(CCLE, "StrippedCellLineName", "Hugo_Symbol")
+rownames(CCLE_Wide) <- CCLE_Wide[,1]
+
+ColSum <- data.frame(colSums(CCLE_Wide[,-1]))
+colnames(ColSum) <- "ColSum"
+CCLE_Wide$Row_Sums <- rowSums(CCLE_Wide[,-1])
+
+Summary_Plots(CCLE_Wide, ColSum)
+```
+
+Reading in clinical sample data from studies.
+```{r,}
+setwd(wd)
+ohsu_2018 <- read.delim(file.path(getwd(), "aml_ohsu_2018", "data_clinical_sample.txt"), header=TRUE, comment.char="#")
+ohsu_2022 <- read.delim(file.path(getwd(), "aml_ohsu_2022", "data_clinical_sample.txt"), header=TRUE, comment.char="#")
+
+ohsu_2018$STUDY_ID <- "OHSU_2018"
+ohsu_2022$STUDY_ID <- "OHSU_2022"
+
+ohsu_2018 <- ohsu_2018[, colSums(is.na(ohsu_2018)) < nrow(ohsu_2018)]
+ohsu_2022 <- ohsu_2022[, colSums(is.na(ohsu_2022)) < nrow(ohsu_2022)]
+
+#print(intersect(names(ohsu_2018), names(ohsu_2022)))
+#print(setdiff(names(ohsu_2018), names(ohsu_2022)))
+
+Patient_Sample_Data <- full_join(ohsu_2022, ohsu_2018)
+Patient_Sample_Data <- select(Patient_Sample_Data, intersect(names(ohsu_2018), names(ohsu_2022)))
+Patient_Sample_Data <- filter(Patient_Sample_Data, ONCOTREE_CODE == Cancer_of_Interest)
+#colSums(is.na(Patient_Sample_Data))
+
+print(paste("There are ", nrow(Patient_Sample_Data), " patient samples from " , length(unique(Patient_Sample_Data$PATIENT_ID)), " patients in the dataset with the disease type specified by oncotree code ", Cancer_of_Interest, ".", sep = ""))
+```
+Reading in mutational data from studies with patient samples.
+```{r,}
+setwd(wd)
+ohsu_2018 <- read.delim(file.path(getwd(), "aml_ohsu_2018", "data_mutations.txt"), header=TRUE, comment.char="#")
+ohsu_2022 <- read.delim(file.path(getwd(), "aml_ohsu_2022", "data_mutations.txt"), header=TRUE, comment.char="#")
+
+ohsu_2018$STUDY_ID <- "OHSU_2018"
+ohsu_2022$STUDY_ID <- "OHSU_2022"
+
+ohsu_2018 <- ohsu_2018[ , colSums(is.na(ohsu_2018)) < nrow(ohsu_2018)]
+ohsu_2022 <- ohsu_2022[ , colSums(is.na(ohsu_2022)) < nrow(ohsu_2022)] 
+
+#print(intersect(names(ohsu_2018), names(ohsu_2022)))
+#print(setdiff(names(ohsu_2018), names(ohsu_2022)))
+
+Patient_Mutation_Data <- full_join(ohsu_2022, ohsu_2018)
+Patient_Mutation_Data$Gene_HGVSpShort <- paste(Patient_Mutation_Data$Hugo_Symbol, Patient_Mutation_Data$HGVSp_Short, sep = "_")
+Patient_Mutation_Data <- dplyr::rename(Patient_Mutation_Data, SAMPLE_ID = Tumor_Sample_Barcode)
+Patient_Mutation_Data <- Patient_Mutation_Data[Patient_Mutation_Data$SAMPLE_ID %in% Patient_Sample_Data$SAMPLE_ID, ]
+#colSums(is.na(Patient_Mutation_Data))
+```
+Reading in clinical patient data from studies.
+```{r,}
+setwd(wd)
+ohsu_2018 <- read.delim(file.path(getwd(), "aml_ohsu_2018", "data_clinical_patient.txt"), header=TRUE, comment.char="#")
+ohsu_2022 <- read.delim(file.path(getwd(), "aml_ohsu_2022", "data_clinical_patient.txt"), header=TRUE, comment.char="#")
+
+ohsu_2018$STUDY_ID <- "IMPACT_2017"
+ohsu_2022$STUDY_ID <- "MET_2021"
+
+ohsu_2018 <- ohsu_2018[ , colSums(is.na(ohsu_2018)) < nrow(ohsu_2018)]
+ohsu_2022 <- ohsu_2022[ , colSums(is.na(ohsu_2022)) < nrow(ohsu_2022)] 
+
+#print(intersect(names(ohsu_2018), names(ohsu_2022)))
+#print(setdiff(names(ohsu_2018), names(ohsu_2022)))
+
+Patient_Clinical_Data <- full_join(ohsu_2022, ohsu_2018)
+Patient_Clinical_Data <- Patient_Clinical_Data[Patient_Clinical_Data$PATIENT_ID %in% Patient_Sample_Data$PATIENT_ID,]
+#colSums(is.na(Patient_Clinical_Data))
+```
+
+```{r,}
+#intersect(names(Patient_Mutation_Data), names(Patient_Sample_Data))
+#intersect(names(Patient_Clinical_Data), names(Patient_Sample_Data))
+Patient_Combined_Data <- inner_join(Patient_Clinical_Data, Patient_Sample_Data)
+
+Patient_Mutation_Data <- Patient_Mutation_Data[Patient_Mutation_Data$Gene_HGVSpShort %in% COSMIC$Gene_HGVSpShort, ]
+Patient_Mutations_Wide <- Wider(Patient_Mutation_Data, "SAMPLE_ID", "Hugo_Symbol")
+ColSum <- data.frame(colSums(Patient_Mutations_Wide[,-1]))
+colnames(ColSum) <- "ColSum"
+Patient_Mutations_Wide$Row_Sums <- rowSums(Patient_Mutations_Wide[,-1])
+Summary_Plots(Patient_Mutations_Wide , ColSum)
+```
+
+```{r, }
+CCLE_Wide <- dplyr::rename(CCLE_Wide, SAMPLE_ID = StrippedCellLineName)
+CCLE_Wide <- CCLE_Wide[ , intersect(names(CCLE_Wide), names(Patient_Mutations_Wide))]
+Patient_Mutations_Wide <- Patient_Mutations_Wide[ , intersect(names(CCLE_Wide), names(Patient_Mutations_Wide))]
+Patient_Mutations_Wide <- Patient_Mutations_Wide[, -ncol(CCLE_Wide)]
+CCLE_Wide <- CCLE_Wide[, -ncol(CCLE_Wide)]
+
+#filter(Patient_Mutations_Wide, rowSums(Patient_Mutations_Wide[,-1]) == 0)
+CCLE_Wide <- CCLE_Wide[rownames(unique(CCLE_Wide[,-1])), ]
+
+heatmap(as.matrix(CCLE_Wide[,colSums(CCLE_Wide[,-1]) >= 1][, -1]), distfun = function(x) dist(x, method = "euclidean"), labRow = CCLE_Wide$SAMPLE_ID, cexCol = 0.5, cexRow = 0.5)
+
+heatmap(as.matrix(Patient_Mutations_Wide[, -1]), distfun = function(x) dist(x, method = "euclidean"), labRow = "", cexCol = .2)
+```
+
+```{r, warning=FALSE}
+Kmeans_Model <- kmeans(Patient_Mutations_Wide[,-1], centers = CCLE_Wide[,-1], algorithm = "Lloyd")
+CCLE_Wide_Reduced <- CCLE_Wide[as.numeric(levels(factor(Kmeans_Model$cluster))),]
+heatmap(as.matrix(CCLE_Wide_Reduced[, -1]), distfun = function(x) dist(x, method = "euclidean"), labRow = CCLE_Wide_Reduced$SAMPLE_ID)
+Kmeans_Model <- kmeans(Patient_Mutations_Wide[,-1], centers = CCLE_Wide_Reduced[,-1], algorithm = "Lloyd")
+
+fviz_cluster(Kmeans_Model, data = Patient_Mutations_Wide[,-1],
+             geom = "point",
+             pch = 16,
+             geom_label = FALSE,
+             ggtheme = theme_minimal(),
+             main = "K-means Clustering of Patients")
+```
+
+IC50 values (in micromolar) of cell lines responding to various drug treatments. The IC50 values are taken from a sigmoidal curve by fitting a mixed-effects model (Vis et al. 2016).
+```{r}
+setwd(wd)
+Patient_Combined_Data <- group_by(Patient_Combined_Data, PATIENT_ID)
+Patient_Combined_Data <- ungroup(filter(Patient_Combined_Data, row_number() == 1))
+CCLE_Drug_IC50 <- read.delim(file.path(getwd(), "ccle_broad_2019", "data_drug_treatment_ic50.txt"), header=TRUE, comment.char="#")
+names(CCLE_Drug_IC50) <- gsub('_.*','', names(CCLE_Drug_IC50))
+CCLE_Drug_IC50 <- cbind(CCLE_Drug_IC50[, 1:4], CCLE_Drug_IC50[, names(CCLE_Drug_IC50) %in% CCLE_Wide$SAMPLE_ID])
+CCLE_Drug_IC50[is.na(CCLE_Drug_IC50)] <- Inf
+
+Top_Drugs <- data.frame()
+  for (Cell_Line in CCLE_Wide$SAMPLE_ID) {
+    Top_Drugs <- rbind(Top_Drugs, cbind(CCLE_Drug_IC50[order(CCLE_Drug_IC50[[Cell_Line]])[1],][, c(1,3,4)], Cell_Line))
+  }
+
+table(Top_Drugs$ENTITY)
+length(unique(Top_Drugs$ENTITY))
+```
+
+```{r}
+Cluster_Membership <- data.frame(Kmeans_Model$cluster, Patient_Mutations_Wide$SAMPLE_ID)
+colnames(Cluster_Membership) <- c("Cluster", "SAMPLE_ID")
+Cluster_Membership <- inner_join(Cluster_Membership, select(Patient_Sample_Data, c(PATIENT_ID, SAMPLE_ID)), by = "SAMPLE_ID")
+Cell_Line <- CCLE_Wide_Reduced$SAMPLE_ID
+Cluster_Membership$Cell_Line <- Cell_Line[Cluster_Membership$Cluster] 
+Cluster_Membership <- select(Cluster_Membership, c(PATIENT_ID, Cell_Line))
+Patient_Drugs <- left_join(Cluster_Membership, Top_Drugs)
+Patient_Drugs <- group_by(Patient_Drugs, Cell_Line)
+Patient_Drugs <- Patient_Drugs %>% mutate(group_count = n())
+df <- unique(Patient_Drugs[,c(2,3,5,6)])
+#print.data.frame(df)
+rmarkdown::paged_table(df)
+```
