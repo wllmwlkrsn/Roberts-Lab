@@ -1,0 +1,103 @@
+---
+title: 'RNAseqDataCleaning'
+author: "WB Wilkerson"
+output: html_document
+---
+
+```{r}
+wd <- "/Users/wllmwlkrsn/Desktop/Roberts Lab/Roberts Lab R/Roberts Lab Project"
+setwd(wd)
+library(dplyr)
+library(stringr)
+library(BEclear)
+library(shiny)
+library(survival)
+library(survminer)
+library(tidyverse)
+```
+
+Reading in data sets from all three studies that we want for the analysis.
+```{r}
+Study_Names <- c("aml_ohsu_2018") #, "aml_ohsu_2022", "aml_target_2018_pub")
+
+for (Entry in Study_Names) {
+  df <- read.delim(file.path(getwd(), Entry, "data_clinical_patient.txt"), header=TRUE, comment.char = "#")
+  df$Study_ID <- Entry
+  if (Entry == "aml_ohsu_2018") {
+    Clinical <- df
+  }
+  else {
+    #df <- df[ ,intersect(names(df), names(Clinical))]
+    Clinical <- suppressMessages(full_join(Clinical, df))
+  }
+}
+
+for (Entry in Study_Names) {
+  df <- read.delim(file.path(getwd(), Entry, "data_clinical_sample.txt"), header=TRUE, comment.char = "#")
+  df$Study_ID <- Entry
+  if (Entry == "aml_ohsu_2018") {
+    df <- df[, !str_detect(names(df), "PB")]
+    df <- df[, !str_detect(names(df), "MUTATION")]
+    df <- df[, !str_detect(names(df), "NEGATIVE")]
+    df <- df[, !str_detect(names(df), "ANALYSIS")]
+    df <- df[, !str_detect(names(df), "LEVEL")]
+    df <- df[, !str_detect(names(df), "ELN")]
+    df <- df[, !str_detect(names(df), "CONSENSUS")]
+    df <- df[, !str_detect(names(df), "SEQUENC")]
+    df <- select(df, !FUSION)
+    Sample <- df
+  }
+  
+  if (Entry == "aml_ohsu_2022") {
+    df <- df %>%
+      select(!c("USED_IN_MANUSCRIPT","COHORT","CENTER_ID" ,"ELN2017", "ALLELIC_RATIO", "RUNX1", "ASXL1", "TP53", "CEBPA_BIALLELIC", "FLT3_ITD", "NPM1"))
+    df <- dplyr::rename(df, SURFACE_ANTIGENS = SURFACE_ANTIGENS_IMMUNOHISTOCHEMICAL_STAINS)
+    Sample <- suppressMessages(full_join(Sample, df))
+  }
+  if (Entry == "aml_target_2018_pub") {
+    df <- df %>%
+      select(c("PATIENT_ID","SAMPLE_ID","BONE_MARROW_SITE_OF_RELAPSE","CNS_SITE_OF_RELAPSE","OTHER_SITE_OF_RELAPSE","ONCOTREE_CODE","CANCER_TYPE","CANCER_TYPE_DETAILED","SOMATIC_STATUS", "TMB_NONSYNONYMOUS"))
+    Sample <- suppressMessages(full_join(Sample, df))
+  }
+}
+
+for (Entry in Study_Names) {
+  df <- read.delim(file.path(getwd(), Entry, "data_mrna_seq_rpkm.txt"), header=TRUE, comment.char = "#")
+  df <- data.frame(t(df))
+  df <- df[ , !(df["Hugo_Symbol",] == "")]
+  colnames(df) <- df["Hugo_Symbol",]
+  df <- df[, order(names(df))]
+  df$SAMPLE_ID <- rownames(df)
+  df$Study_ID <- Entry
+  df <- df[, c(c("SAMPLE_ID", "Study_ID"), setdiff(names(df), c("SAMPLE_ID", "Study_ID")))]
+  rownames(df)
+  if (Entry == "aml_ohsu_2018") {
+    mRNAseq_RPKM <- df[-c(1:2),]
+  }
+  if (Entry == "aml_ohsu_2022") {
+    mRNAseq_RPKM <- suppressMessages(full_join(mRNAseq_RPKM, df[-1,]))
+  }
+  if (Entry == "aml_target_2018_pub") {
+    mRNAseq_RPKM <- suppressMessages(full_join(mRNAseq_RPKM, df[-c(1:2),]))
+  }
+}
+mRNAseq_RPKM$SAMPLE_ID <- gsub('\\.', '-', mRNAseq_RPKM$SAMPLE_ID)
+
+for (name in names(mRNAseq_RPKM[,3:ncol(mRNAseq_RPKM)])) {
+  mRNAseq_RPKM[[name]] <- as.numeric(mRNAseq_RPKM[[name]])
+}
+```
+
+Adjusting for batch effect in mRNA-seq data.
+```{r}
+Kaplan_Meier_Dataset <- inner_join(Sample[,c(1:2)], mRNAseq_RPKM)
+Kaplan_Meier_Dataset <- group_by(Kaplan_Meier_Dataset, PATIENT_ID)
+Kaplan_Meier_Dataset <- filter(Kaplan_Meier_Dataset, row_number() == 1)
+Kaplan_Meier_Dataset <- ungroup(Kaplan_Meier_Dataset)
+Clinical <- na.omit(select(Clinical, c("PATIENT_ID", "OS_MONTHS", "OS_STATUS")))
+Clinical$OS_STATUS <- as.numeric(gsub('\\:.*', '', Clinical$OS_STATUS))
+Kaplan_Meier_Dataset <- inner_join(Clinical, Kaplan_Meier_Dataset)
+Kaplan_Meier_Dataset <- select(Kaplan_Meier_Dataset, !c(Study_ID, SAMPLE_ID))
+```
+
+Batch_Effect <- calcBatchEffects(data = mRNAseq_RPKM[,-c(1], ))
