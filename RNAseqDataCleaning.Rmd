@@ -18,12 +18,12 @@ library(tidyverse)
 
 Reading in data sets from all three studies that we want for the analysis.
 ```{r}
-Study_Names <- c("aml_ohsu_2018") #, "aml_ohsu_2022", "aml_target_2018_pub")
+Study_Names <- c("aml_ohsu_2022") #aml_ohsu_2018
 
 for (Entry in Study_Names) {
   df <- read.delim(file.path(getwd(), Entry, "data_clinical_patient.txt"), header=TRUE, comment.char = "#")
   df$Study_ID <- Entry
-  if (Entry == "aml_ohsu_2018") {
+  if (Entry == "aml_ohsu_2022") {
     Clinical <- df
   }
   else {
@@ -35,6 +35,13 @@ for (Entry in Study_Names) {
 for (Entry in Study_Names) {
   df <- read.delim(file.path(getwd(), Entry, "data_clinical_sample.txt"), header=TRUE, comment.char = "#")
   df$Study_ID <- Entry
+  if (Entry == "aml_ohsu_2022") {
+    df <- df %>%
+      select(!c("USED_IN_MANUSCRIPT","COHORT","CENTER_ID" ,"ELN2017", "ALLELIC_RATIO", "RUNX1", "ASXL1", "TP53", "CEBPA_BIALLELIC", "FLT3_ITD", "NPM1"))
+    df <- dplyr::rename(df, SURFACE_ANTIGENS = SURFACE_ANTIGENS_IMMUNOHISTOCHEMICAL_STAINS)
+    Sample <- df
+  }
+  
   if (Entry == "aml_ohsu_2018") {
     df <- df[, !str_detect(names(df), "PB")]
     df <- df[, !str_detect(names(df), "MUTATION")]
@@ -45,15 +52,9 @@ for (Entry in Study_Names) {
     df <- df[, !str_detect(names(df), "CONSENSUS")]
     df <- df[, !str_detect(names(df), "SEQUENC")]
     df <- select(df, !FUSION)
-    Sample <- df
-  }
-  
-  if (Entry == "aml_ohsu_2022") {
-    df <- df %>%
-      select(!c("USED_IN_MANUSCRIPT","COHORT","CENTER_ID" ,"ELN2017", "ALLELIC_RATIO", "RUNX1", "ASXL1", "TP53", "CEBPA_BIALLELIC", "FLT3_ITD", "NPM1"))
-    df <- dplyr::rename(df, SURFACE_ANTIGENS = SURFACE_ANTIGENS_IMMUNOHISTOCHEMICAL_STAINS)
     Sample <- suppressMessages(full_join(Sample, df))
   }
+  
   if (Entry == "aml_target_2018_pub") {
     df <- df %>%
       select(c("PATIENT_ID","SAMPLE_ID","BONE_MARROW_SITE_OF_RELAPSE","CNS_SITE_OF_RELAPSE","OTHER_SITE_OF_RELAPSE","ONCOTREE_CODE","CANCER_TYPE","CANCER_TYPE_DETAILED","SOMATIC_STATUS", "TMB_NONSYNONYMOUS"))
@@ -71,11 +72,11 @@ for (Entry in Study_Names) {
   df$Study_ID <- Entry
   df <- df[, c(c("SAMPLE_ID", "Study_ID"), setdiff(names(df), c("SAMPLE_ID", "Study_ID")))]
   rownames(df)
-  if (Entry == "aml_ohsu_2018") {
-    mRNAseq_RPKM <- df[-c(1:2),]
-  }
   if (Entry == "aml_ohsu_2022") {
-    mRNAseq_RPKM <- suppressMessages(full_join(mRNAseq_RPKM, df[-1,]))
+    mRNAseq_RPKM <- df[-1,]
+  }
+  if (Entry == "aml_ohsu_2018") {
+    mRNAseq_RPKM <- suppressMessages(full_join(mRNAseq_RPKM, df[-c(1,2),]))
   }
   if (Entry == "aml_target_2018_pub") {
     mRNAseq_RPKM <- suppressMessages(full_join(mRNAseq_RPKM, df[-c(1:2),]))
@@ -88,7 +89,7 @@ for (name in names(mRNAseq_RPKM[,3:ncol(mRNAseq_RPKM)])) {
 }
 ```
 
-Adjusting for batch effect in mRNA-seq data.
+I would like to adjust for batch effect in mRNA-seq data, not looking like I'll be able to figure it out...
 ```{r}
 Kaplan_Meier_Dataset <- inner_join(Sample[,c(1:2)], mRNAseq_RPKM)
 Kaplan_Meier_Dataset <- group_by(Kaplan_Meier_Dataset, PATIENT_ID)
@@ -96,8 +97,16 @@ Kaplan_Meier_Dataset <- filter(Kaplan_Meier_Dataset, row_number() == 1)
 Kaplan_Meier_Dataset <- ungroup(Kaplan_Meier_Dataset)
 Clinical <- na.omit(select(Clinical, c("PATIENT_ID", "OS_MONTHS", "OS_STATUS")))
 Clinical$OS_STATUS <- as.numeric(gsub('\\:.*', '', Clinical$OS_STATUS))
-Kaplan_Meier_Dataset <- inner_join(Clinical, Kaplan_Meier_Dataset)
+Kaplan_Meier_Dataset <- full_join(Clinical, Kaplan_Meier_Dataset)
 Kaplan_Meier_Dataset <- select(Kaplan_Meier_Dataset, !c(Study_ID, SAMPLE_ID))
 ```
 
-Batch_Effect <- calcBatchEffects(data = mRNAseq_RPKM[,-c(1], ))
+To be able to upload files to Github I selected only COSMIC tier 1 genes.
+```{r}
+Cosmic_Tier1s <- read.csv(file.path(getwd(), "Cosmic_Tier1_Names.csv"))[,2]
+Cosmic_Tier1s <- append(Cosmic_Tier1s, c("PATIENT_ID", "OS_MONTHS", "OS_STATUS"))
+Kaplan_Meier_Dataset <- Kaplan_Meier_Dataset[, names(Kaplan_Meier_Dataset) %in% Cosmic_Tier1s]
+write.csv(Kaplan_Meier_Dataset, "Kaplan_Meier_Dataset.csv")
+```
+
+

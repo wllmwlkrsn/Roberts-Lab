@@ -70,6 +70,8 @@ if (!exists("COSMIC")) {
   COSMIC <- dplyr::rename(COSMIC, cDNA_Change = Mutation.CDS)
   COSMIC$Gene_HGVSpShort <- paste(COSMIC$Hugo_Symbol, COSMIC$HGVSp_Short, sep = "_")   
 }
+#Cosmic_Tier1s <- unique(COSMIC$Hugo_Symbol)
+#write.csv(Cosmic_Tier1s, "Cosmic_Tier1_Names.csv")
 ```
 
 Could definitely add some EDA of 'COSMIC' data set. IN THE FUTURE.

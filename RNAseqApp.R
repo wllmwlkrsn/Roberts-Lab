@@ -5,7 +5,9 @@ library(survminer)
 library(tidyverse)
 library(ggfortify)
 
- ui <- fluidPage(
+Kaplan_Meier_Dataset <- read.csv("Kaplan_Meier_Dataset.csv")
+
+ui <- fluidPage(
    titlePanel("Transcriptional Status and Acute Myeloid Leukemia Survival Inspired by OncoLnc"),
    
    sidebarLayout(
@@ -16,13 +18,13 @@ library(ggfortify)
                  placeholder = "Hugo Symbol of Gene"),
        
        numericInput(inputId = "Upper_Percentile", 
-                    value = 50,
+                    value = 0,
                     min = 50,
                     max = 99,
                     label = "Upper Percentile"),
        
        numericInput(inputId = "Lower_Percentile", 
-                    value = 50,
+                    value = 0,
                     min = 1,
                     max = 50,
                     label = "Lower Percentile")
