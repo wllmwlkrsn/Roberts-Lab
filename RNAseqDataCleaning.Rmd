@@ -9,10 +9,6 @@ wd <- "/Users/wllmwlkrsn/Desktop/Roberts Lab/Roberts Lab R/Roberts Lab Project"
 setwd(wd)
 library(dplyr)
 library(stringr)
-library(BEclear)
-library(shiny)
-library(survival)
-library(survminer)
 library(tidyverse)
 ```
 
@@ -106,6 +102,7 @@ To be able to upload files to Github I selected only COSMIC tier 1 genes.
 Cosmic_Tier1s <- read.csv(file.path(getwd(), "Cosmic_Tier1_Names.csv"))[,2]
 Cosmic_Tier1s <- append(Cosmic_Tier1s, c("PATIENT_ID", "OS_MONTHS", "OS_STATUS"))
 Kaplan_Meier_Dataset <- Kaplan_Meier_Dataset[, names(Kaplan_Meier_Dataset) %in% Cosmic_Tier1s]
+Kaplan_Meier_Dataset <- na.omit(Kaplan_Meier_Dataset)
 write.csv(Kaplan_Meier_Dataset, "Kaplan_Meier_Dataset.csv")
 ```
 
